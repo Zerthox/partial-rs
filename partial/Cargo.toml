@@ -1,0 +1,8 @@
+[package]
+name = "partial"
+version = "0.1.0"
+edition = "2021"
+authors = ["Zerthox"]
+
+[dependencies]
+partial_macros = { path = "../partial_macros" }

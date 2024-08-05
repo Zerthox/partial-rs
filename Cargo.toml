@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "partial",
+    "partial_macros",
+]
+resolver = "2"
