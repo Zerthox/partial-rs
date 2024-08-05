@@ -6,6 +6,7 @@ Partial representations of types.
 use partial::{Partial, IntoPartial, PartialOps};
 
 #[derive(Debug, Default, Clone, Partial)]
+#[partial(derive(Debug, Clone))]
 struct MyStruct {
     valid: bool,
     id: u32,
@@ -29,3 +30,4 @@ let update = second.into_partial().and(Partial::<MyStruct> {
 });
 value.set(update);
 ```
+ 
