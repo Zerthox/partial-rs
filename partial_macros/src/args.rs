@@ -5,14 +5,14 @@ use syn::{Ident, Path};
 
 #[derive(FromAttr)]
 #[attribute(ident = partial)]
-pub struct Args {
+pub struct StructArgs {
     name: Option<String>,
 
     #[attribute(optional)]
     derive: Vec<Path>,
 }
 
-impl Args {
+impl StructArgs {
     pub fn name(&self, parent: &Ident) -> Ident {
         self.name
             .as_ref()
@@ -28,4 +28,10 @@ impl Args {
             #[derive(#(#derives),*)]
         }
     }
+}
+
+#[derive(FromAttr)]
+#[attribute(ident = partial)]
+pub struct FieldArgs {
+    pub flatten: bool,
 }

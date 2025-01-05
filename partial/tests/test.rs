@@ -87,3 +87,26 @@ fn attributes() {
     let clone = partial.clone();
     assert_eq!(partial, clone);
 }
+
+#[test]
+fn flatten() {
+    #[derive(Debug, Default, Clone, Partial)]
+    #[partial(derive(Debug))]
+    struct Inner {
+        valid: bool,
+        id: u32,
+        name: String,
+    }
+
+    #[derive(Debug, Default, Clone, Partial)]
+    #[partial(derive(Debug))]
+    struct Outer {
+        #[partial(flatten)]
+        inner: Inner,
+        primitive: i32,
+    }
+
+    let empty = Partial::<Outer>::empty();
+    assert!(empty.inner.is_empty());
+    assert!(empty.is_empty());
+}

@@ -30,4 +30,30 @@ let update = second.into_partial().and(Partial::<MyStruct> {
 });
 value.set(update);
 ```
- 
+
+Other types implementing `IntoPartial` can be used as their `Partial` representation instead of `Option`:
+```rs
+#[derive(Debug, Default, Partial)]
+struct Inner {
+    valid: bool,
+    id: u32,
+    name: String,
+}
+
+#[derive(Debug, Default, Partial)]
+struct Outer {
+    #[partial(flatten)]
+    inner: Inner,
+    primitive: i32,
+}
+
+let mut value = Outer::default();
+let update = Partial::<Outer> {
+    inner: Partial::<Inner> {
+        valid: Some(true),
+        ..Partial::<Inner>::empty()
+    },
+    primitive: None,
+};
+value.set(update);
+```

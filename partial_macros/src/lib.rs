@@ -3,7 +3,7 @@ mod args;
 use self::args::*;
 use attribute_derive::FromAttr;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Field, Fields, Member, Type};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, Member, Type};
 
 /// Derive macro generating an associated partial struct and implementations.
 #[proc_macro_derive(Partial, attributes(partial))]
@@ -16,7 +16,7 @@ pub fn partial(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         data,
     } = parse_macro_input!(input as DeriveInput);
 
-    let fields = match data {
+    let struct_fields = match data {
         Data::Struct(data) => data.fields,
         Data::Enum(data) => {
             return syn::Error::new_spanned(
@@ -36,34 +36,56 @@ pub fn partial(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         }
     };
 
-    let args = match Args::from_attributes(&attrs) {
+    let args = match StructArgs::from_attributes(&attrs) {
         Ok(args) => args,
         Err(err) => return err.into_compile_error().into(),
     };
 
-    let partial_fields = fields.iter().map(|field| {
+    struct Field {
+        args: FieldArgs,
+        field: syn::Field,
+        member: Member,
+    }
+
+    let fields = struct_fields
+        .clone()
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut field)| {
+            let args = FieldArgs::remove_attributes(&mut field.attrs)?;
+            let member = match field.ident.clone() {
+                Some(ident) => Member::Named(ident),
+                None => Member::Unnamed(i.into()),
+            };
+            Ok(Field {
+                args,
+                field,
+                member,
+            })
+        })
+        .collect::<syn::Result<Vec<_>>>();
+    let fields = match fields {
+        Ok(fields) => fields,
+        Err(err) => return err.into_compile_error().into(),
+    };
+
+    let partial_fields = fields.iter().map(|Field { args, field, .. }| {
         let ty = &field.ty;
-        Field {
-            ty: Type::Verbatim(quote! { ::core::option::Option<#ty> }),
+        syn::Field {
+            ty: if args.flatten {
+                Type::Verbatim(quote! { ::partial::Partial<#ty> })
+            } else {
+                Type::Verbatim(quote! { ::core::option::Option<#ty> })
+            },
             ..field.clone()
         }
     });
-
-    let members = fields
-        .iter()
-        .cloned()
-        .enumerate()
-        .map(|(i, field)| match field.ident {
-            Some(ident) => Member::Named(ident),
-            None => Member::Unnamed(i.into()),
-        })
-        .collect::<Vec<_>>();
 
     let partial = args.name(&parent);
     let attributes = args.attributes(&parent);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let partial_struct = match fields {
+    let partial_struct = match struct_fields {
         Fields::Named(_) => quote! {
             #vis struct #partial #ty_generics #where_clause {
                 #(#partial_fields),*
@@ -79,6 +101,29 @@ pub fn partial(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         },
     };
 
+    let members_normal = fields
+        .iter()
+        .filter(|Field { args, .. }| !args.flatten)
+        .map(|Field { member, .. }| member)
+        .collect::<Vec<_>>();
+
+    let members_flatten = fields
+        .iter()
+        .filter(|Field { args, .. }| args.flatten)
+        .map(|Field { member, .. }| member)
+        .collect::<Vec<_>>();
+
+    let members_flatten_ty = fields
+        .iter()
+        .filter(|Field { args, .. }| args.flatten)
+        .map(|Field { field, .. }| field.ty.clone())
+        .collect::<Vec<_>>();
+
+    let qualifiers = fields
+        .iter()
+        .all(|Field { args, .. }| !args.flatten)
+        .then_some(quote! { const });
+
     quote! {
         #[automatically_derived]
         #attributes
@@ -88,16 +133,18 @@ pub fn partial(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         impl #impl_generics #partial #ty_generics #where_clause {
             /// Creates an empty partial.
             #[inline]
-            const fn empty() -> Self {
+            pub #qualifiers fn empty() -> Self {
                 Self {
-                    #( #members: ::core::option::Option::None ),*
+                    #( #members_normal: ::core::option::Option::None ),*
+                    #( , #members_flatten: <::partial::Partial<#members_flatten_ty> as ::partial::PartialOps>::empty() )*
                 }
             }
 
             /// Checks if the partial is empty.
             #[inline]
-            const fn is_empty(&self) -> bool {
-                #( self.#members.is_none() )&&*
+            pub #qualifiers fn is_empty(&self) -> bool {
+                #( self.#members_normal.is_none() )&&*
+                #( && ::partial::PartialOps::is_empty(&self.#members_flatten) )*
             }
         }
 
@@ -123,14 +170,16 @@ pub fn partial(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
             #[inline]
             fn set_and(&mut self, other: Self) {
-                #( self.#members = self.#members.as_ref().and(other.#members) );*
+                #( self.#members_normal = self.#members_normal.as_ref().and(other.#members_normal) );*
+                #( ; ::partial::PartialOps::set_and(&mut self.#members_flatten, other.#members_flatten) )*
             }
 
             #[inline]
             fn set_or(&mut self, other: Self) {
-                #( if self.#members.is_none() {
-                    self.#members = other.#members
-                } );*
+                #( if self.#members_normal.is_none() {
+                    self.#members_normal = other.#members_normal
+                } )*
+                #( ::partial::PartialOps::set_or(&mut self.#members_flatten, other.#members_flatten) );*
             }
         }
 
@@ -141,15 +190,17 @@ pub fn partial(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             #[inline]
             fn into_partial(self) -> Self::Partial {
                 Self::Partial {
-                    #( #members: ::core::option::Option::Some(self.#members) ),*
+                    #( #members_normal: ::core::option::Option::Some(self.#members_normal) ),*
+                    #( , #members_flatten: ::partial::IntoPartial::into_partial(self.#members_flatten) )*
                 }
             }
 
             #[inline]
             fn set(&mut self, partial: Self::Partial) {
-                #( if let ::core::option::Option::Some(value) = partial.#members {
-                    self.#members = value;
+                #( if let ::core::option::Option::Some(value) = partial.#members_normal {
+                    self.#members_normal = value;
                 } )*
+                #( ::partial::IntoPartial::set(&mut self.#members_flatten, partial.#members_flatten) );*
             }
         }
     }
